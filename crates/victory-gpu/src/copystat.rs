@@ -881,7 +881,7 @@ fn log_memory() {
          host copies the host renders to or writes: {} alive {:.0} MB; host copies the title \
          fills: {} alive {:.0} MB ({} of them placed), {} let go {:.0} MB and {} made again \
          {:.0} MB since the start; {} host copies made in all; passes that made none for lack of \
-         room: {}; slots draws left waiting for lack of memory (VICTORY_DRAW_TEXTURE_BOUND): {}; the card: {:.0} MB in use of a budget of {:.0} MB, {:.0} MB of the PC's memory \
+         room: {}; slots draws left waiting for lack of memory (VICTORY_DRAW_TEXTURE_BOUND): {}, textures with many slots waiting left without a copy for it: {}; copies the title fills made by (place copies MB): {}; the card: {:.0} MB in use of a budget of {:.0} MB, {:.0} MB of the PC's memory \
          shared with it in use",
         census[2],
         mb(census[3]),
@@ -897,6 +897,8 @@ fn log_memory() {
         kinds[6],
         crate::draw::HEAP_TEXTURES_FULL.load(Relaxed),
         crate::resource::DRAW_DEFERRED.load(Relaxed),
+        crate::resource::MANY_DEFERRED.load(Relaxed),
+        crate::resource::made_by::largest(6),
         mb(card[1]),
         mb(card[0]),
         mb(card[3]),

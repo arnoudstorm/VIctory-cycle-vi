@@ -633,7 +633,13 @@ pub(crate) fn texture_made(resource: usize) {
 #[cfg(windows)]
 fn wait_for(resource: usize, handle: u64) {
     /// A texture with more slots waiting than this is in use for all we
-    /// know (its views are being copied about): its host copy is made.
+    /// know (its views are being copied about): its host copy is made,
+    /// unless the title fills it and memory is short
+    /// (`crate::resource::bound_new_copy`): its slots go on waiting, as
+    /// fewer would. Without that, a draw's bound (game test 51) left a
+    /// texture's slots waiting only until the 65th, and was met 90 times
+    /// while the copies the title fills reached 1.9 GB on a card 1.2 GB
+    /// past its budget.
     const MOST: usize = 64;
     let many = {
         let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
@@ -643,7 +649,9 @@ fn wait_for(resource: usize, handle: u64) {
         }
         slots.len() > MOST
     };
-    if many {
+    if many && crate::resource::bound_new_copy(resource) {
+        crate::resource::MANY_DEFERRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    } else if many {
         // Makes it, and notes it made.
         let _ = crate::resource::host_copy(resource as This);
     } else if !crate::resource::host_waits(resource as This) {

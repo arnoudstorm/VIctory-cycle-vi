@@ -1360,6 +1360,7 @@ pub(crate) fn host_waits(this: This) -> bool {
 /// The host side of title texture `this`: made now if it is not there and
 /// `make` says so. `None` for buffers and for textures the host refuses.
 #[cfg(windows)]
+#[track_caller]
 fn hosted(this: This, make: bool) -> Option<Made> {
     use std::sync::atomic::Ordering::Relaxed;
     let r = resource(this);
@@ -1398,6 +1399,8 @@ fn hosted(this: This, make: bool) -> Option<Made> {
         if host.filled {
             KINDS[0].fetch_add(1, Relaxed);
             KINDS[1].fetch_add(host.bytes, Relaxed);
+            #[cfg(feature = "diagnostics")]
+            made_by::note(std::panic::Location::caller(), host.bytes);
         }
         if r.host.gone.load(Relaxed) {
             KINDS[4].fetch_add(1, Relaxed);
@@ -1411,6 +1414,82 @@ fn hosted(this: This, make: bool) -> Option<Made> {
     }
     r.host.used.store(crate::host::moment(), Relaxed);
     made.clone()
+}
+
+/// Which code made the host copies of textures the title fills: the
+/// caller of `host_resource` or `host_copy` that found none made, with
+/// how many copies and bytes, since the start (the memory line shows the
+/// largest). Copies let go and made again count again.
+#[cfg(all(windows, feature = "diagnostics"))]
+pub(crate) mod made_by {
+    use std::collections::HashMap;
+    use std::panic::Location;
+    use std::sync::Mutex;
+
+    static BY: Mutex<Option<HashMap<&'static Location<'static>, (u64, u64)>>> = Mutex::new(None);
+
+    pub(crate) fn note(at: &'static Location<'static>, bytes: u64) {
+        let mut by = BY.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = by.get_or_insert_with(HashMap::new).entry(at).or_default();
+        entry.0 += 1;
+        entry.1 += bytes;
+    }
+
+    /// The `n` places that made the most bytes, as
+    /// `file:line copies MB`, largest first.
+    pub(crate) fn largest(n: usize) -> String {
+        let by = BY.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(by) = by.as_ref() else {
+            return String::from("none");
+        };
+        top(by.iter().map(|(at, &(count, bytes))| (format!("{}:{}", short(at.file()), at.line()), count, bytes)), n)
+    }
+
+    /// The path from `src` on (or the file name), for a shorter line.
+    fn short(file: &str) -> &str {
+        let file = file.trim_start_matches(['.', '/', '\\']);
+        file.rfind("src").map_or(file, |i| &file[i + 4..])
+    }
+
+    pub(super) fn top(places: impl Iterator<Item = (String, u64, u64)>, n: usize) -> String {
+        let mut all: Vec<_> = places.collect();
+        all.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+        let line: Vec<String> = all
+            .iter()
+            .take(n)
+            .map(|(at, count, bytes)| format!("{at} {count} {} MB", bytes >> 20))
+            .collect();
+        if line.is_empty() { String::from("none") } else { line.join(", ") }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        /// The places that made the most bytes come first, ties by name,
+        /// and only `n` of them.
+        #[test]
+        fn largest_places_first() {
+            let places = [
+                (String::from("draw.rs:579"), 10, 300 << 20),
+                (String::from("host.rs:5905"), 900, 1200 << 20),
+                (String::from("list.rs:928"), 4, 300 << 20),
+                (String::from("ambient.rs:307"), 1, 1 << 20),
+            ];
+            assert_eq!(
+                super::top(places.into_iter(), 3),
+                "host.rs:5905 900 1200 MB, draw.rs:579 10 300 MB, list.rs:928 4 300 MB"
+            );
+            assert_eq!(super::top(std::iter::empty(), 3), "none");
+        }
+
+        /// A caller's place survives `host_resource`'s `#[track_caller]`
+        /// path as the caller's own file, shortened from `src` on.
+        #[test]
+        fn short_names_start_after_src() {
+            assert_eq!(super::short("crates\\victory-gpu\\src\\draw.rs"), "draw.rs");
+            assert_eq!(super::short("crates/victory-gpu/src/descriptor/host.rs"), "descriptor/host.rs");
+            assert_eq!(super::short("lib.rs"), "lib.rs");
+        }
+    }
 }
 
 /// The host copy of title texture `this` if it is made, without making it
@@ -1482,6 +1561,20 @@ pub(crate) fn room() -> bool {
 #[cfg(windows)]
 pub(crate) fn defer_for_draw(texture: usize) -> bool {
     use std::sync::atomic::Ordering::Relaxed;
+    let short = bound_new_copy(texture);
+    if short {
+        DRAW_DEFERRED.fetch_add(1, Relaxed);
+    }
+    short
+}
+
+/// Whether a new host copy of title texture `texture` waits for memory:
+/// one the title fills, while the bound is on (`VICTORY_DRAW_TEXTURE_BOUND`,
+/// unless `0`) and memory is short ([`short_for_new`]). Memory is asked
+/// again at most every 50 ms.
+#[cfg(windows)]
+pub(crate) fn bound_new_copy(texture: usize) -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if !*ON.get_or_init(|| std::env::var_os("VICTORY_DRAW_TEXTURE_BOUND").is_none_or(|v| v != "0")) {
         return false;
@@ -1494,23 +1587,23 @@ pub(crate) fn defer_for_draw(texture: usize) -> bool {
     static SHORT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     let now = crate::host::now_ms();
     let asked = ASKED.load(Relaxed);
-    let short = if asked != 0 && now.saturating_sub(asked) < 50 {
-        SHORT.load(Relaxed)
-    } else {
-        let card = crate::host::host()
-            .and_then(|h| h.video_memory())
-            .map(|[budget, used, ..]| (budget, used));
-        let pc = crate::host::available_physical_ram().map(|free| (free, texture_min_free()));
-        let short = short_for_new(card, pc);
-        SHORT.store(short, Relaxed);
-        ASKED.store(now.max(1), Relaxed);
-        short
-    };
-    if short {
-        DRAW_DEFERRED.fetch_add(1, Relaxed);
+    if asked != 0 && now.saturating_sub(asked) < 50 {
+        return SHORT.load(Relaxed);
     }
+    let card = crate::host::host()
+        .and_then(|h| h.video_memory())
+        .map(|[budget, used, ..]| (budget, used));
+    let pc = crate::host::available_physical_ram().map(|free| (free, texture_min_free()));
+    let short = short_for_new(card, pc);
+    SHORT.store(short, Relaxed);
+    ASKED.store(now.max(1), Relaxed);
     short
 }
+
+/// Textures with many slots waiting that were left without a host copy
+/// for lack of memory (`crate::descriptor` `wait_for`), since the start.
+#[cfg(windows)]
+pub(crate) static MANY_DEFERRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Slots a draw left waiting for lack of memory ([`defer_for_draw`]),
 /// since the start.
@@ -1904,6 +1997,7 @@ pub(crate) fn host_transition(this: This, wanted: u32) -> Option<(*mut c_void, u
 /// this is the texture's first use ([`Hosted`]). Asking is a use; what must
 /// not count as one asks `host_made`.
 #[cfg(windows)]
+#[track_caller]
 pub(crate) fn host_resource<'a>(
     this: This,
 ) -> Option<&'a windows::Win32::Graphics::Direct3D12::ID3D12Resource> {
@@ -1921,6 +2015,7 @@ pub(crate) fn host_resource<'a>(
 
 /// A title texture's host copy, shared, for a list to hold.
 #[cfg(windows)]
+#[track_caller]
 pub(crate) fn host_copy(this: This) -> Option<std::sync::Arc<HostTexture>> {
     if this.is_null() {
         return None;
