@@ -1,0 +1,11 @@
+﻿{
+    "exe":  "C:\\Users\\Arnou\\victory-runs\\cycle-vii\\exe\\victory-phase0-0e6e5eab-crtstatic.exe",
+    "game":  "C:\\Users\\Arnou\\Downloads\\build",
+    "jobs":  4,
+    "started":  "2026-11-27T14:46:40.6381368+01:00",
+    "seconds":  399.6,
+    "exit_code":  null,
+    "peak_private_mb":  1865,
+    "peak_working_set_mb":  1871,
+    "cpu_seconds":  0
+}

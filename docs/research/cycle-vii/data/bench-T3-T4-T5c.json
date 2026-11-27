@@ -1,0 +1,170 @@
+[
+  {
+    "run": "T3-nosave-relay0",
+    "exe_sha256": "783E2898756FEDC2401A3412DC4DAE2B2E6492F8FB184446CBC120822549A6C3",
+    "launcher_args": [
+      "-Safe"
+    ],
+    "extra_env": {},
+    "termination": "stopped by hand at the user's request at 17.7 min (playable gameplay, no failure)",
+    "runtime_s": 1071.9,
+    "to_picker_s": 36.9,
+    "to_world_s": 144.4,
+    "window_s": 598.6,
+    "window_complete": true,
+    "fps": 2.77,
+    "fps_world_only": 1.32,
+    "world_share_of_window": 0.693,
+    "fps_line_mean": 3.1,
+    "frame_ms": {
+      "p50": 602.2,
+      "p90": 1197.4,
+      "p99": 2057.5,
+      "max": 3574.2
+    },
+    "freezes": {
+      "count": 23,
+      "total_s": 56.0,
+      "longest_s": 3.7
+    },
+    "draws_mean": 1722.2,
+    "cost_ms": {
+      "prep": 273.1,
+      "copies": 171.1,
+      "textures": 40.7,
+      "gpu": 296.0,
+      "copy_back": 49.4
+    },
+    "copies_mb_per_frame": 249.6,
+    "textures_mb_per_frame": 133.7,
+    "pipelines_built_in_window": 52,
+    "pipelines_being_made_max": 2.0,
+    "dropped_without_pipeline_mean": 321.4,
+    "ram_mb": {
+      "start": 11867.0,
+      "end": 12260.0,
+      "peak": 12566.0
+    },
+    "ram_growth_mb_per_min": 39.4,
+    "vram_mb_peak": 6914.0,
+    "vram_over_budget_s": 341.7,
+    "system": {
+      "ram_available_mb_min": 59.0,
+      "gpu_3d_pct_mean": 37.0,
+      "victory_cpu_pct_mean": 14.6,
+      "pages_per_s_mean": null
+    }
+  },
+  {
+    "run": "T4-nosave-relay0-audited",
+    "exe_sha256": "783E2898756FEDC2401A3412DC4DAE2B2E6492F8FB184446CBC120822549A6C3",
+    "launcher_args": [
+      "-Safe"
+    ],
+    "extra_env": {},
+    "termination": "process exited without a VIctory failure line",
+    "runtime_s": 774.8,
+    "to_picker_s": 96.6,
+    "to_world_s": 198.7,
+    "window_s": 563.8,
+    "window_complete": false,
+    "fps": 1.34,
+    "fps_world_only": 1.35,
+    "world_share_of_window": 0.99,
+    "fps_line_mean": 1.4,
+    "frame_ms": {
+      "p50": 687.6,
+      "p90": 1054.3,
+      "p99": 2319.1,
+      "max": 5060.4
+    },
+    "freezes": {
+      "count": 11,
+      "total_s": 27.2,
+      "longest_s": 3.8
+    },
+    "draws_mean": 4489.2,
+    "cost_ms": {
+      "prep": 285.2,
+      "copies": 152.2,
+      "textures": 47.6,
+      "gpu": 380.8,
+      "copy_back": 68.0
+    },
+    "copies_mb_per_frame": 302.0,
+    "textures_mb_per_frame": 169.6,
+    "pipelines_built_in_window": 0,
+    "pipelines_being_made_max": 0,
+    "dropped_without_pipeline_mean": 431.8,
+    "ram_mb": {
+      "start": 11183.0,
+      "end": 12343.0,
+      "peak": 12345.0
+    },
+    "ram_growth_mb_per_min": 123.4,
+    "vram_mb_peak": 6946.0,
+    "vram_over_budget_s": 518.6,
+    "system": {
+      "ram_available_mb_min": 84.0,
+      "gpu_3d_pct_mean": 45.6,
+      "victory_cpu_pct_mean": 12.6,
+      "pages_per_s_mean": 8526.8
+    }
+  },
+  {
+    "run": "T5c-nosave-relay0-rtoff-audited",
+    "exe_sha256": "783E2898756FEDC2401A3412DC4DAE2B2E6492F8FB184446CBC120822549A6C3",
+    "launcher_args": [
+      "-Safe,-NoAmbient"
+    ],
+    "extra_env": {},
+    "termination": "VIctory: unhandled exception 0xc0000005 at victory-image-b99f876b74d4a77f.dll+0x3de4797 (read 0x4: nothing mapped there)",
+    "runtime_s": 463.1,
+    "to_picker_s": 12.3,
+    "to_world_s": 66.9,
+    "window_s": 386.1,
+    "window_complete": false,
+    "fps": 4.28,
+    "fps_world_only": 1.26,
+    "world_share_of_window": 0.765,
+    "fps_line_mean": 5.2,
+    "frame_ms": {
+      "p50": 618.9,
+      "p90": 1175.4,
+      "p99": 1727.2,
+      "max": 5266.5
+    },
+    "freezes": {
+      "count": 19,
+      "total_s": 56.7,
+      "longest_s": 5.6
+    },
+    "draws_mean": 2836.3,
+    "cost_ms": {
+      "prep": 340.1,
+      "copies": 243.2,
+      "textures": 38.7,
+      "gpu": 277.2,
+      "copy_back": 58.9
+    },
+    "copies_mb_per_frame": 301.0,
+    "textures_mb_per_frame": 128.7,
+    "pipelines_built_in_window": 4,
+    "pipelines_being_made_max": 0,
+    "dropped_without_pipeline_mean": 772.3,
+    "ram_mb": {
+      "start": 10558.0,
+      "end": 12247.0,
+      "peak": 12416.0
+    },
+    "ram_growth_mb_per_min": 262.5,
+    "vram_mb_peak": 7057.0,
+    "vram_over_budget_s": 186.8,
+    "system": {
+      "ram_available_mb_min": 170.0,
+      "gpu_3d_pct_mean": 36.4,
+      "victory_cpu_pct_mean": 14.7,
+      "pages_per_s_mean": 40145.3
+    }
+  }
+]
