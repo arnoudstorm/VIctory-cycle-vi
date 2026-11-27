@@ -1396,6 +1396,10 @@ mod host {
 }
 
 #[cfg(test)]
+#[path = "gameinput_lifecycle_tests.rs"]
+mod lifecycle_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
