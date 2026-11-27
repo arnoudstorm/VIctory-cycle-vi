@@ -141,6 +141,7 @@ $profile = switch ($Preset) {
 # Measured memory/performance settings shared by all laptop profiles.
 $settings = [ordered]@{
     VICTORY_NO_WATCHDOG       = '1'
+    VICTORY_SKIP_BROKEN_LISTS = '1'
     VICTORY_F16_NEAREST       = '1'
     VICTORY_LAZY_LISTS        = '1'
     VICTORY_PRELUDE_POOL      = $profile.PreludePool

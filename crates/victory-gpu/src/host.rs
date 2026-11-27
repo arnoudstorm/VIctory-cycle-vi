@@ -910,6 +910,9 @@ pub(crate) struct HostList {
     indirect_args: Mutex<Option<(ID3D12Resource, u64)>>,
     /// Counts the list in [`ALIVE`] while it lives.
     _alive: Counted,
+    /// Its `Close` failed for lack of memory ([`skip_broken_lists`]): what
+    /// it recorded is not sent, until the list is reset.
+    broken: std::sync::atomic::AtomicBool,
     /// The texts of the markers `note_op` set, in order (for device-removed
     /// data without marker texts), with the host GPU range a copy reads.
     #[cfg(feature = "diagnostics")]
@@ -919,6 +922,21 @@ pub(crate) struct HostList {
     #[cfg(feature = "diagnostics")]
     stamps: OnceLock<Option<(ID3D12QueryHeap, ID3D12Resource)>>,
 }
+
+/// `VICTORY_SKIP_BROKEN_LISTS=1` (off by default): a host list whose
+/// `Close` fails with `E_OUTOFMEMORY` is left out of its submission instead
+/// of ending the run. On the 780M a run ended this way once memory was
+/// short (game test 52: 256 KB upload buffers and 768x768 depth textures
+/// refused, then the list did not close). What the list drew is missing for
+/// that frame, and the texture states it would have left are assumed
+/// all the same.
+fn skip_broken_lists() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SKIP_BROKEN_LISTS").is_some_and(|v| v == "1"))
+}
+
+/// Host lists left out of their submission by [`skip_broken_lists`].
+pub(crate) static BROKEN_LISTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// A list's prelude: an allocator and a closed list.
 type Prelude = (ID3D12CommandAllocator, ID3D12GraphicsCommandList);
@@ -4171,6 +4189,7 @@ impl Host {
                 budget: OnceLock::new(),
                 indirect_args: Mutex::default(),
                 _alive: Counted::new(),
+                broken: std::sync::atomic::AtomicBool::new(false),
                 #[cfg(feature = "diagnostics")]
                 notes: Mutex::default(),
                 #[cfg(feature = "diagnostics")]
@@ -5305,7 +5324,9 @@ impl Host {
             // A list never opened has nothing to run, and must not be sent:
             // a `CreateCommandList1` list that was never opened removed the
             // device on the 780M (`lazy_list_tests`).
-            if !list.list.unopened() {
+            // A list whose close ran out of memory is not sent either
+            // (`skip_broken_lists`); its prelude still runs.
+            if !list.list.unopened() && !list.broken.load(Ordering::Acquire) {
                 lists.push(list.list.raw().cast().ok());
             }
         }
@@ -5847,6 +5868,15 @@ impl HostList {
         }
         // SAFETY: our list.
         if let Err(e) = unsafe { self.list.raw().Close() } {
+            if e.code() == windows::Win32::Foundation::E_OUTOFMEMORY && skip_broken_lists() {
+                // The driver ran out of command memory while the list was
+                // recorded: the list is closed but must not run. Its work
+                // is lost for this submission and the run goes on.
+                self.broken.store(true, Ordering::Release);
+                let n = BROKEN_LISTS.fetch_add(1, Ordering::Relaxed) + 1;
+                tracing::warn!(error = %e, skipped = n, "a host command list ran out of memory while recorded: not sent (VICTORY_SKIP_BROKEN_LISTS)");
+                return;
+            }
             fail(format_args!(
                 "a host command list did not close ({e}): a command recorded into it was invalid"
             ));
@@ -5863,6 +5893,7 @@ impl HostList {
         #[cfg(feature = "diagnostics")]
         let started = std::time::Instant::now();
         self._alive.used();
+        self.broken.store(false, Ordering::Release);
         *self.deferred() = Deferred::default();
         self.states.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.twins.lock().unwrap_or_else(|e| e.into_inner()).clear();
