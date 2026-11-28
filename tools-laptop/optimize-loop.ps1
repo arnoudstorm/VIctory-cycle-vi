@@ -3,7 +3,8 @@
 # survives -SurviveMinutes, then kills it, lets RAM recover, and goes on with the next variant.
 # Results: results.csv next to this script (one row per run) and a summary at the end.
 #   powershell -ExecutionPolicy Bypass -File tools-laptop\optimize-loop.ps1 [-SurviveMinutes 4] [-Only B,C]
-param([double]$SurviveMinutes = 4, [string[]]$Only, [int]$Round = 1)
+# -KeepRunning: a variant that survives is left running (to play on) instead of closed.
+param([double]$SurviveMinutes = 4, [string[]]$Only, [int]$Round = 1, [switch]$KeepRunning)
 
 $repo = Split-Path $PSScriptRoot -Parent
 $exe = Join-Path (Get-Content (Join-Path $repo 'game_dir.txt') -TotalCount 1).Trim() 'game_scarlett_master.exe'
@@ -125,6 +126,42 @@ if ($Round -eq 10) {
         'Z-Y-diag'       = @{ More = $noCard + $ported + $lazy + $windows + $snapsOnly + $evict + @{ VICTORY_MEMORY_MAP = '0' }; Args = @{ Build = 'diag' } }
     }
 }
+# Round 11: the windows are in use every frame (the heap pass holds 1.3-1.9 GB of them for shaders that
+# pick buffers by index), so idle eviction frees nothing; in-place turned down 3,774 of 3,993 as view memory
+# (the page pool, a SEC_RESERVE section). The probe says what this driver makes of title memory as heaps.
+if ($Round -eq 11) {
+    $base = @{ VICTORY_TEXTURE_ROOM_PERCENT = '50' }
+    $variants = [ordered]@{
+        'P1-probe' = @{ More = $noCard + $ported + $lazy + $windows + $snapsOnly + $evict + @{ VICTORY_INPLACE = '1'; VICTORY_INPLACE_PROBE = '1' }; Args = @{} }
+    }
+}
+# Round 12: the probe says the page pool's section can be shared once committed. How much of the window
+# memory lies in one run of the section (shareable) and how much is scattered: the census every 10 s.
+if ($Round -eq 12) {
+    $base = @{ VICTORY_TEXTURE_ROOM_PERCENT = '50' }
+    $variants = [ordered]@{
+        'C1-census' = @{ More = $noCard + $ported + $lazy + $windows + $snapsOnly + $evict + @{ VICTORY_INPLACE_PROBE = '1'; VICTORY_INPLACE_CENSUS_S = '10' }; Args = @{} }
+    }
+}
+# Round 13: C1's census of the 2,424 MB of windows: 365 MB one run of the page pool (shareable once it is
+# committed), 117 MB private (INPLACE=1 shares it today), 438 MB scattered, 1,357 MB over unmapped pages.
+# The best so far with INPLACE=1, twice (runs of the same switches lasted 79-236 s).
+$best = $noCard + $ported + $lazy + $windows + $snapsOnly + $evict
+if ($Round -eq 13) {
+    $base = @{ VICTORY_TEXTURE_ROOM_PERCENT = '50' }
+    $variants = [ordered]@{
+        'B1-best-inplace' = @{ More = $best + @{ VICTORY_INPLACE = '1' }; Args = @{} }
+        'B2-best-inplace' = @{ More = $best + @{ VICTORY_INPLACE = '1' }; Args = @{} }
+    }
+}
+# Round 14: the best switches with the Claude app and the browsers closed (tools-laptop\closed-run.ps1):
+# about 0.7 GB more for the game, near what it was short.
+if ($Round -eq 14) {
+    $base = @{ VICTORY_TEXTURE_ROOM_PERCENT = '50' }
+    $variants = [ordered]@{
+        'CL-best-closed' = @{ More = $best + @{ VICTORY_INPLACE = '1' }; Args = @{} }
+    }
+}
 
 function Stop-Game { Get-Process victory -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
 function Free-GB { [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 2) }
@@ -171,7 +208,9 @@ foreach ($name in $variants.Keys) {
         if ($secs -ge $SurviveMinutes * 60) { break }
         if ($secs -gt 300 + $SurviveMinutes * 60) { $result = 'timeout'; break }
     }
-    Start-Sleep 2; Stop-Game; Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue
+    if (-not ($KeepRunning -and $result -eq 'survived')) {
+        Start-Sleep 2; Stop-Game; Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue
+    }
 
     $card = 0; $after = ''
     if ($log) {
@@ -182,6 +221,6 @@ foreach ($name in $variants.Keys) {
     Add-Content $csv $row -Encoding ascii
     Write-Host "     -> $result after $secs s, world at $(if ($worldAt) { "$worldAt s" } else { 'never' }), most draws/frame $draws, peak private $peak GB, min free $minFree GB, card peak $card MB"
 }
-Stop-Game
+if (-not $KeepRunning) { Stop-Game }
 Write-Host ''; Write-Host '==== results'; Import-Csv $csv | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 Write-Host 'LOOP DONE'
