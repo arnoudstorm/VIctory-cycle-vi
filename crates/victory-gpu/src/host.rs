@@ -1287,13 +1287,77 @@ mod tests {
 /// ([`HostList::batch_place`]).
 const BATCHES: u32 = 8;
 
+/// `VICTORY_LAZY_LISTS=1` (off by default; ported from the laptop fork,
+/// arnoudstorm/VIctory 00b6f89d): a host list is made closed and without
+/// command memory (`CreateCommandList1`), and opened on its allocator the
+/// first time a command is recorded into it. The driver gives a list its
+/// first block of command memory when it is opened: ~1.1-1.3 MB on a Radeon
+/// 780M, and the title makes ~633 lists at its start of which ~620 are not
+/// used before its world. Measured there at the start screen: the card
+/// 2,051 -> 1,524 MB, private 6,785 -> 6,046 MB.
+fn lazy_lists() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_LAZY_LISTS").is_some_and(|v| v == "1"))
+}
+
+/// A host command list that may not be open yet ([`lazy_lists`]). Using it
+/// as the list (`Deref`) opens it first; [`LazyList::raw`] does not, for
+/// closing, resetting and submitting, where a list never opened stays as
+/// it was made: closed and empty.
+pub(crate) struct LazyList {
+    list: ID3D12GraphicsCommandList,
+    /// The allocator it opens on: the list's own, replaced with it when
+    /// [`allocator_trim`] takes a new one ([`LazyList::set_allocator`]).
+    allocator: Mutex<ID3D12CommandAllocator>,
+    /// Made closed and not opened since.
+    unopened: std::sync::atomic::AtomicBool,
+}
+
+impl LazyList {
+    /// The list as it is, without opening it.
+    pub(crate) fn raw(&self) -> &ID3D12GraphicsCommandList {
+        &self.list
+    }
+
+    /// Whether the list was never opened (made closed and empty).
+    pub(crate) fn unopened(&self) -> bool {
+        self.unopened.load(Ordering::Acquire)
+    }
+
+    /// The list's allocator was replaced ([`allocator_trim`]): it opens on
+    /// the new one from now on.
+    pub(crate) fn set_allocator(&self, allocator: &ID3D12CommandAllocator) {
+        *self.allocator.lock().unwrap_or_else(|e| e.into_inner()) = allocator.clone();
+    }
+}
+
+/// Lazy host lists opened so far ([`lazy_lists`]).
+pub(crate) static LAZY_OPENED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl std::ops::Deref for LazyList {
+    type Target = ID3D12GraphicsCommandList;
+
+    fn deref(&self) -> &ID3D12GraphicsCommandList {
+        if self.unopened.load(Ordering::Acquire) && self.unopened.swap(false, Ordering::AcqRel) {
+            LAZY_OPENED.fetch_add(1, Ordering::Relaxed);
+            // SAFETY: a closed list made by `CreateCommandList1`, never
+            // submitted; its allocator holds nothing it runs.
+            let allocator = self.allocator.lock().unwrap_or_else(|e| e.into_inner());
+            if let Err(e) = unsafe { self.list.Reset(&*allocator, None) } {
+                fail(format_args!("a host command list made closed did not open ({e})"));
+            }
+        }
+        &self.list
+    }
+}
+
 /// A host command list and its allocator, always used together.
 pub(crate) struct HostList {
     /// Its command allocator and when it was made ([`now_ms`]): with
     /// [`allocator_trim`] a reset now and then takes a new one, and the old
     /// one, which keeps the most memory its list ever recorded into it, goes.
     allocator: Mutex<(ID3D12CommandAllocator, u64)>,
-    pub(crate) list: ID3D12GraphicsCommandList,
+    pub(crate) list: LazyList,
     /// Work for submission time, in recorded order.
     deferred: Mutex<Deferred>,
     /// Upload memory for data the list's draws make (expanded vertices),
@@ -1360,6 +1424,9 @@ pub(crate) struct HostList {
     left_open: [std::sync::atomic::AtomicU64; 2],
     /// Counts the list in [`ALIVE`] while it lives.
     _alive: Counted,
+    /// Its `Close` failed for lack of memory ([`skip_broken_lists`]): what
+    /// it recorded is not sent, until the list is reset.
+    broken: std::sync::atomic::AtomicBool,
     /// The texts of the markers `note_op` set, in order (for device-removed
     /// data without marker texts), with the host GPU range a copy reads.
     #[cfg(feature = "diagnostics")]
@@ -1369,6 +1436,21 @@ pub(crate) struct HostList {
     #[cfg(feature = "diagnostics")]
     stamps: OnceLock<Option<(ID3D12QueryHeap, ID3D12Resource)>>,
 }
+
+/// `VICTORY_SKIP_BROKEN_LISTS=1` (off by default; ported from the laptop
+/// fork, arnoudstorm/VIctory 0e6e5eab): a host list whose `Close` fails with
+/// `E_OUTOFMEMORY` is left out of its submission instead of ending the run.
+/// On a Radeon 780M with 16 GB runs ended this way once memory was short
+/// ("a host command list did not close (Not enough memory resources ...)").
+/// What the list drew is missing for that frame, and the texture states it
+/// would have left are assumed all the same.
+fn skip_broken_lists() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SKIP_BROKEN_LISTS").is_some_and(|v| v == "1"))
+}
+
+/// Host lists left out of their submission by [`skip_broken_lists`].
+pub(crate) static BROKEN_LISTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// A list's prelude: an allocator and a closed list.
 type Prelude = (ID3D12CommandAllocator, ID3D12GraphicsCommandList);
@@ -4578,12 +4660,16 @@ impl Host {
             let allocator: ID3D12CommandAllocator = self
                 .device
                 .CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
-            let list: ID3D12GraphicsCommandList = self.device.CreateCommandList(
-                0,
-                D3D12_COMMAND_LIST_TYPE_DIRECT,
-                &allocator,
-                None,
-            )?;
+            let lazy = lazy_lists();
+            let list: ID3D12GraphicsCommandList = if lazy {
+                self.device.cast::<ID3D12Device4>()?.CreateCommandList1(
+                    0,
+                    D3D12_COMMAND_LIST_TYPE_DIRECT,
+                    D3D12_COMMAND_LIST_FLAG_NONE,
+                )?
+            } else {
+                self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)?
+            };
             let prelude = Mutex::new(None);
             if !lazy_prelude() {
                 *prelude.lock().unwrap_or_else(|e| e.into_inner()) = self.make_prelude().map(|p| (p, now_ms()));
@@ -4612,8 +4698,12 @@ impl Host {
                 );
             }
             Ok(HostList {
+                list: LazyList {
+                    list,
+                    allocator: Mutex::new(allocator.clone()),
+                    unopened: std::sync::atomic::AtomicBool::new(lazy),
+                },
                 allocator: Mutex::new((allocator, now_ms())),
-                list,
                 deferred: Mutex::default(),
                 scratch: Mutex::default(),
                 states: Mutex::default(),
@@ -4635,6 +4725,7 @@ impl Host {
                 hudless: std::sync::atomic::AtomicU64::new(0),
                 left_open: [const { std::sync::atomic::AtomicU64::new(0) }; 2],
                 _alive: Counted::new(),
+                broken: std::sync::atomic::AtomicBool::new(false),
                 #[cfg(feature = "diagnostics")]
                 notes,
                 #[cfg(feature = "diagnostics")]
@@ -6190,7 +6281,14 @@ impl Host {
             if let Some(prelude) = list.prelude(&uploads) {
                 lists.push(Some(prelude));
             }
-            lists.push(list.list.cast().ok());
+            // A list whose close ran out of memory is not sent
+            // (`skip_broken_lists`); its prelude still runs.
+            // A list never opened has nothing to run and must not be sent: a
+            // `CreateCommandList1` list that was never opened removed the
+            // device on the 780M (laptop fork, `lazy_list_tests`).
+            if !list.broken.load(Ordering::Acquire) && !list.list.unopened() {
+                lists.push(list.list.raw().cast().ok());
+            }
         }
         batch.fill();
         stage.next("submit: the last refreshes");
@@ -6851,8 +6949,21 @@ impl HostList {
                 self.list.ResolveQueryData(heap, D3D12_QUERY_TYPE_TIMESTAMP, 0, count + 1, back, 0);
             }
         }
+        // A list never opened was made closed ([`lazy_lists`]).
+        if self.list.unopened() {
+            return;
+        }
         // SAFETY: our list.
-        if let Err(e) = unsafe { self.list.Close() } {
+        if let Err(e) = unsafe { self.list.raw().Close() } {
+            if e.code() == windows::Win32::Foundation::E_OUTOFMEMORY && skip_broken_lists() {
+                // The driver ran out of command memory while the list was
+                // recorded: the list is closed but must not run. Its work
+                // is lost for this submission and the run goes on.
+                self.broken.store(true, Ordering::Release);
+                let n = BROKEN_LISTS.fetch_add(1, Ordering::Relaxed) + 1;
+                tracing::warn!(error = %e, skipped = n, "a host command list ran out of memory while recorded: not sent (VICTORY_SKIP_BROKEN_LISTS)");
+                return;
+            }
             fail(format_args!(
                 "a host command list did not close ({e}): a command recorded into it was invalid"
             ));
@@ -6927,7 +7038,10 @@ impl HostList {
         }
         FRESH_OPEN[2].fetch_add(1, Ordering::Relaxed);
         // SAFETY: our list, open; what went into it goes with the reset.
-        let _ = unsafe { self.list.Close() };
+        // (A lazy list nothing was recorded into is closed already.)
+        if !self.list.unopened() {
+            let _ = unsafe { self.list.raw().Close() };
+        }
         false
     }
 
@@ -6962,6 +7076,7 @@ impl HostList {
         let started = std::time::Instant::now();
         let _resetting = crate::timeline::span("resetting a host list");
         self._alive.used();
+        self.broken.store(false, Ordering::Release);
         self.upscale.store(0, Ordering::Relaxed);
         self.hudless.store(0, Ordering::Relaxed);
         *self.coming.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -6998,7 +7113,16 @@ impl HostList {
             // SAFETY: the list is not executing; a fresh allocator is new
             // and empty.
             let reset = unsafe {
-                (if fresh { Ok(()) } else { allocator.Reset() }).and_then(|()| self.list.Reset(&*allocator, None))
+                (if fresh { Ok(()) } else { allocator.Reset() }).and_then(|()| {
+                    // The lazy list opens on the allocator it has now: not on
+                    // the one trimmed away, which it would keep alive besides.
+                    if fresh {
+                        self.list.set_allocator(allocator);
+                    }
+                    // A list never opened stays closed and empty: its first
+                    // command opens it ([`lazy_lists`]).
+                    if self.list.unopened() { Ok(()) } else { self.list.raw().Reset(&*allocator, None) }
+                })
             };
             if let Err(e) = reset {
                 fail(format_args!("a host command list did not reset ({e})"));

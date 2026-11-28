@@ -1650,6 +1650,28 @@ fn record(handle: u64, view: View) {
     mirror(handle);
 }
 
+/// Makes null the host slots of every shader heap that show one of the
+/// host resources `shown` (raw interface pointers), and queues their title
+/// slots again ([`host::HostHeap::unshow`]). Returns how many slots.
+#[cfg(windows)]
+pub(crate) fn unshow(shown: &std::collections::HashSet<usize>) -> usize {
+    if shown.is_empty() {
+        return 0;
+    }
+    let frame = crate::frame::current();
+    // (The heaps stay while the lock is held: `mirror`.)
+    let heaps = SHADER_HEAPS.read().unwrap_or_else(|e| e.into_inner());
+    let mut made_null = 0;
+    for &(_, _, at) in heaps.iter() {
+        // SAFETY: a registered heap, live while the lock is held.
+        let heap = unsafe { &*(at as *const Heap) };
+        if let Some(Some(host)) = heap.host.get() {
+            made_null += host.unshow(shown, frame);
+        }
+    }
+    made_null
+}
+
 /// The title released `resource`: the views naming it go stale.
 pub(crate) fn forget(resource: usize) {
     #[cfg(windows)]

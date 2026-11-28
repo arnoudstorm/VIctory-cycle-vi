@@ -590,6 +590,7 @@ pub(crate) fn pipeline(
     let wide = HSTRING::from(name);
     let Some(library) = library().filter(|_| !STATIC_SAMPLERS.get()) else {
         MADE.fetch_add(1, Ordering::Relaxed);
+        let _room = room_to_compile();
         return create();
     };
     let began = std::time::Instant::now();
@@ -615,6 +616,7 @@ pub(crate) fn pipeline(
     };
     // Compiled outside any lock: compiles take up to seconds.
     let pso = {
+        let _room = room_to_compile();
         let _call = call("make", name);
         create()?
     };
@@ -635,6 +637,78 @@ pub(crate) fn pipeline(
         library.added.fetch_add(1, Ordering::Relaxed);
     }
     Ok(pso)
+}
+
+/// The commit headroom below which driver compiles are held back, in
+/// bytes: `VICTORY_COMPILE_HEADROOM_MB` (1536 unless set; 0 turns the gate
+/// off). Ported from the laptop fork (arnoudstorm/VIctory 174cb2a9).
+fn compile_headroom() -> u64 {
+    static LIMIT: OnceLock<u64> = OnceLock::new();
+    *LIMIT.get_or_init(|| headroom_setting(std::env::var("VICTORY_COMPILE_HEADROOM_MB").ok().as_deref()))
+}
+
+/// The gate's threshold for a setting in MiB (`None`: unset or not a number).
+fn headroom_setting(mb: Option<&str>) -> u64 {
+    mb.and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(1536) << 20
+}
+
+/// Bytes the system can still commit (its commit limit less what is
+/// committed), or `None` if Windows does not say.
+#[cfg(windows)]
+fn commit_room() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{K32GetPerformanceInfo, PERFORMANCE_INFORMATION};
+    let mut info = PERFORMANCE_INFORMATION {
+        cb: size_of::<PERFORMANCE_INFORMATION>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: the buffer and its size describe a writable PERFORMANCE_INFORMATION.
+    if unsafe { K32GetPerformanceInfo(&mut info, info.cb) } == 0 {
+        return None;
+    }
+    Some((info.CommitLimit.saturating_sub(info.CommitTotal) * info.PageSize) as u64)
+}
+
+/// Compiles made one at a time while commit room is short.
+static SHORT_OF_ROOM: Mutex<()> = Mutex::new(());
+/// Compiles held back so far, and the milliseconds they waited.
+static HELD: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+/// Before a driver compile: with the system's commit room under
+/// [`compile_headroom`], compiles go one at a time, and each waits up to
+/// ten seconds for the room to come back before it goes ahead anyway.
+/// Driver compiles of big translated programs take hundreds of MB each,
+/// several workers make them at once, and on a PC whose commit is nearly
+/// used up (a 16 GB laptop in the world: 1.4 GB left) a burst of them can
+/// take what the title's own allocations then fail for. `None` when there
+/// is room: compiles run as they always did.
+fn room_to_compile() -> Option<MutexGuard<'static, ()>> {
+    let limit = compile_headroom();
+    #[cfg(windows)]
+    let room = commit_room();
+    #[cfg(not(windows))]
+    let room: Option<u64> = None;
+    if limit == 0 || room.is_none_or(|r| r >= limit) {
+        return None;
+    }
+    let guard = SHORT_OF_ROOM.lock().unwrap_or_else(|e| e.into_inner());
+    let began = std::time::Instant::now();
+    #[cfg(windows)]
+    while began.elapsed() < std::time::Duration::from_secs(10) && commit_room().is_some_and(|r| r < limit) {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let ms = began.elapsed().as_millis() as u64;
+    let held = HELD[0].fetch_add(1, Ordering::Relaxed) + 1;
+    let waited = HELD[1].fetch_add(ms, Ordering::Relaxed) + ms;
+    if held.is_power_of_two() {
+        tracing::info!(
+            held,
+            waited_ms = waited,
+            room_mb = room.unwrap_or(0) >> 20,
+            limit_mb = limit >> 20,
+            "driver compiles held back: the system's commit room is short (VICTORY_COMPILE_HEADROOM_MB)"
+        );
+    }
+    Some(guard)
 }
 
 /// Writes the library and the early list if pipelines were added since the
@@ -851,6 +925,20 @@ pub(crate) fn note_used(key: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compile_headroom_setting() {
+        assert_eq!(headroom_setting(None), 1536 << 20);
+        assert_eq!(headroom_setting(Some("2048")), 2048 << 20);
+        assert_eq!(headroom_setting(Some(" 0 ")), 0);
+        assert_eq!(headroom_setting(Some("lots")), 1536 << 20);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn commit_room_is_reported() {
+        assert!(commit_room().is_some_and(|r| r > 0));
+    }
 
     #[test]
     fn names_change_with_what_goes_into_the_pipeline() {

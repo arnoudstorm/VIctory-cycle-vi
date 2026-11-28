@@ -3207,6 +3207,50 @@ impl HostHeap {
         self.keep(index, None);
     }
 
+    /// Makes null every title slot whose host slot shows one of the host
+    /// resources `shown` (by their raw interface pointers) and queues it
+    /// again as written in `frame`, so that the texture pass makes it anew
+    /// when the card has room (`crate::resource::let_go_idle`, with
+    /// `VICTORY_EVICT_SHOWN=1`). Returns how many slots it made null.
+    ///
+    /// The slot gives up what it held through [`HostHeap::keep`], which
+    /// retires it: a submission already sent may still read it. A list not
+    /// yet run that reads the slot reads a null view (black), not freed
+    /// memory. Dynamic slots (tables copied per draw) are left alone: they
+    /// have no record to make them from again, and lists give them back.
+    pub(crate) fn unshow(&self, shown: &std::collections::HashSet<usize>, frame: u64) -> usize {
+        use windows::core::Interface;
+        if self.sampler || shown.is_empty() {
+            return 0;
+        }
+        let raw_in = |index: u32| -> Option<usize> {
+            self.kept
+                .get(index as usize)?
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+                .map(|r| r.as_raw() as usize)
+        };
+        let mut made_null = 0;
+        for index in 0..self.count {
+            // (Without the slot's lock first: few slots show one of them.)
+            if !raw_in(index).is_some_and(|raw| shown.contains(&raw)) {
+                continue;
+            }
+            {
+                let _made = self.made.lock(index);
+                // Written again meanwhile: it shows something else now.
+                if !raw_in(index).is_some_and(|raw| shown.contains(&raw)) {
+                    continue;
+                }
+                self.unmake(index);
+            }
+            self.queue_texture(index, true, false, frame);
+            made_null += 1;
+        }
+        made_null
+    }
+
     /// The slots [`HostHeap::note_buffer`] found stale for slot `index`, with
     /// what they were made from then, become null. None of their locks is
     /// held here; one made from another record meanwhile is left as it is.
