@@ -309,10 +309,16 @@ title's Xbox Series build v1.0.2.1 (the folder with
 ```powershell
 git clone https://github.com/trustno1-coder/VIctory-NVIDIA
 cd VIctory-NVIDIA
-copy victory.example.toml victory.toml      # then set game_dir to your dump's folder, outside this one
 .\Get-NVIDIA-DLSS.cmd                        # once: NVIDIA's DLSS and frame generation files, about 70 MB
-scripts\play-nvidia.ps1 -Exe 'D:\Games\MyDump\game_scarlett_master.exe'
+powershell -ExecutionPolicy Bypass -File scripts\play-nvidia.ps1 -Exe 'D:\Games\MyDump\game_scarlett_master.exe'
 ```
+
+Run the last line exactly as shown, with `powershell -ExecutionPolicy Bypass
+-File` in front. Windows blocks scripts by default, and `scripts\play-nvidia.ps1`
+typed on its own stops with "running scripts is disabled on this system".
+`-Exe` names your dump, so no `victory.toml` is needed. To keep the paths in a
+file instead, `copy victory.example.toml victory.toml` and set `game_dir` to
+your dump's folder, outside this one.
 
 The first start builds the layer (a few minutes). `Get-NVIDIA-DLSS.cmd` gets
 NVIDIA's files from
@@ -340,7 +346,8 @@ fork has always had; its options:
 
 What the F1 menu saved (`victory-settings.txt`) goes over these at every start;
 delete that file to go back to them. Full screen: start the game, then run
-`.\scripts\fullscreen.ps1` in another window. Logs go to
+`powershell -ExecutionPolicy Bypass -File scripts\fullscreen.ps1` in another
+window. Logs go to
 `%LOCALAPPDATA%\victory\logs`, saves to `%LOCALAPPDATA%\victory\data`.
 
 If the menu works but loading a scene closes the game, see the

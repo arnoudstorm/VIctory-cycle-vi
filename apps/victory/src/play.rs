@@ -50,6 +50,84 @@ const FETCH_D3D12: &str = include_str!("../../../scripts/get-d3d12.ps1");
 /// The two AMD files FSR 3 frame generation loads.
 const FSR_FILES: [&str; 2] = ["amd_fidelityfx_loader_dx12.dll", "amd_fidelityfx_framegeneration_dx12.dll"];
 
+/// A PC with at most this much RAM gets [`LOW_RAM_SETTINGS`] and the Series S
+/// profile: 16 GB PCs, which Windows reports as 15-16 GB.
+const LOW_RAM_BYTES: u64 = 20 << 30;
+
+/// Over [`SETTINGS`] on a PC with little RAM ([`LOW_RAM_BYTES`]; `--set
+/// VICTORY_LOW_RAM_PROFILE=0` or `=1` decides instead), before what the menu
+/// saved and `--set`. Measured on a 16 GB laptop with a Radeon 780M (one memory
+/// for the PC and the card; `tools-laptop\optimize-loop.ps1`, rounds 1-18): at
+/// the title screen 6.0 GB private and 1.3 GB of shared GPU memory with these,
+/// 8.7 GB and 3.5 GB without. Copies kept on the card cost the PC's RAM there,
+/// so they are off; host lists open only when used and are left out when their
+/// recording ran out of memory; smaller buffer windows; fewer snapshots; idle
+/// textures only descriptor slots hold are let go over the card's line; the
+/// title's memory is shared in place where it can be. No 64 KiB buffers are made
+/// ahead at the logos (`crate::ahead` in victory-gpu): their 4,096 cost 1.3-2.0 GB
+/// of private and 1.0-1.7 GB of shared GPU memory there at the title screen
+/// (bisected to 64d4931; laptop rounds 21-22), for a hitch they save at the first
+/// 3D frame.
+const LOW_RAM_SETTINGS: &[(&str, &str)] = &[
+    ("VICTORY_LOW_RAM_PROFILE", "1"),
+    ("VICTORY_CARD_BUFFERS_MB", "0"),
+    ("VICTORY_MEMORY_CARD_MB", "0"),
+    ("VICTORY_CARD_STEPS", "0"),
+    ("VICTORY_CARD_AWAKE", "0"),
+    ("VICTORY_WC_NO_BACK", "0"),
+    ("VICTORY_RELAY_COPY", "0"),
+    ("VICTORY_INDIRECT_CARD_BUDGET", "0"),
+    ("VICTORY_SKIP_BROKEN_LISTS", "1"),
+    ("VICTORY_LAZY_LISTS", "1"),
+    ("VICTORY_WINDOW_KB", "256"),
+    ("VICTORY_WINDOW_TAILS", "1"),
+    ("VICTORY_SNAPSHOT_POOL", "32"),
+    ("VICTORY_KEEP_SNAPSHOTS_MB", "64"),
+    ("VICTORY_EVICT_SHOWN", "1"),
+    ("VICTORY_INPLACE", "1"),
+    ("VICTORY_TEXTURE_ROOM_PERCENT", "50"),
+    ("VICTORY_BUFFERS_AHEAD", "0"),
+];
+
+/// The PC's physical RAM in bytes, if Windows says.
+#[cfg(windows)]
+fn total_ram() -> Option<u64> {
+    #[repr(C)]
+    struct MemoryStatusEx {
+        length: u32,
+        memory_load: u32,
+        total_phys: u64,
+        avail_phys: u64,
+        total_page_file: u64,
+        avail_page_file: u64,
+        total_virtual: u64,
+        avail_virtual: u64,
+        avail_extended_virtual: u64,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GlobalMemoryStatusEx(buffer: *mut MemoryStatusEx) -> i32;
+    }
+    let mut m = MemoryStatusEx {
+        length: std::mem::size_of::<MemoryStatusEx>() as u32,
+        memory_load: 0,
+        total_phys: 0,
+        avail_phys: 0,
+        total_page_file: 0,
+        avail_page_file: 0,
+        total_virtual: 0,
+        avail_virtual: 0,
+        avail_extended_virtual: 0,
+    };
+    // SAFETY: `m` is a MEMORYSTATUSEX with its length set, as the call asks.
+    (unsafe { GlobalMemoryStatusEx(&mut m) } != 0).then_some(m.total_phys)
+}
+
+#[cfg(not(windows))]
+fn total_ram() -> Option<u64> {
+    None
+}
+
 /// The settings the title is started with (`scripts\play-foxhound.ps1` has
 /// the same, with what each is for).
 const SETTINGS: &[(&str, &str)] = &[
@@ -287,9 +365,36 @@ fn parse_menu(text: &str) -> Vec<(String, String)> {
 /// The settings of a start and whether it is the Series S profile: the
 /// options, what the menu saved over them (`menu`), `--set` over both.
 /// `streamline`: the folder with NVIDIA's files, if there is one.
+#[cfg(test)]
 fn settings(o: &Play, menu: &[(String, String)], streamline: Option<&Path>) -> (BTreeMap<String, String>, bool) {
+    settings_for(o, menu, streamline, false)
+}
+
+/// [`settings`], on a PC with little RAM or not (`low_ram`, [`LOW_RAM_BYTES`]):
+/// there [`LOW_RAM_SETTINGS`] and the Series S profile unless the menu saved
+/// another console. `VICTORY_LOW_RAM_PROFILE=0`/`1` (`--set`, or a line of the
+/// menu's file) decides instead of the RAM.
+fn settings_for(
+    o: &Play,
+    menu: &[(String, String)],
+    streamline: Option<&Path>,
+    low_ram: bool,
+) -> (BTreeMap<String, String>, bool) {
     let saved = |k: &str| menu.iter().rev().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
-    let series_s = saved("VICTORY_MENU_CONSOLE").map_or(o.series_s, |c| c == "series-s");
+    let forced = o
+        .more
+        .iter()
+        .filter_map(|m| m.split_once('='))
+        .rev()
+        .find(|(k, _)| k.trim() == "VICTORY_LOW_RAM_PROFILE")
+        .map(|(_, v)| v.trim())
+        .or_else(|| saved("VICTORY_LOW_RAM_PROFILE"));
+    let low_ram = match forced {
+        Some("1") => true,
+        Some("0") => false,
+        _ => low_ram,
+    };
+    let series_s = saved("VICTORY_MENU_CONSOLE").map_or(o.series_s || low_ram, |c| c == "series-s");
     let res = saved("VICTORY_MENU_RES").filter(|r| RESOLUTIONS.contains(r)).unwrap_or(&o.res);
     let mut dlss = saved("VICTORY_MENU_DLSS").filter(|d| DLSS_MODES.contains(d)).unwrap_or(&o.dlss);
     // Series S picture: the scene's size, which with DLSS on is its mode (the menu keeps the
@@ -366,6 +471,11 @@ fn settings(o: &Play, menu: &[(String, String)], streamline: Option<&Path>) -> (
         set("VICTORY_FRAMEGEN_X", &x.to_string());
         if !s.contains_key("VICTORY_TEXTURE_ROOM_PERCENT") {
             s.insert("VICTORY_TEXTURE_ROOM_PERCENT".to_owned(), if framegen { "80" } else { "86" }.to_owned());
+        }
+    }
+    if low_ram {
+        for (k, v) in LOW_RAM_SETTINGS {
+            s.insert((*k).to_owned(), (*v).to_owned());
         }
     }
     let mut set = |k: &str, v: &str| drop(s.insert(k.to_owned(), v.to_owned()));
@@ -856,7 +966,14 @@ pub(crate) fn prepare(o: &Play) -> Result<Ready> {
         offer_dlss(picked.is_some_and(|d| DLSS_MODES.contains(&d)));
     }
     let streamline = streamline_dir(&here);
-    let (mut s, series_s) = settings(o, &menu, streamline.as_deref());
+    let ram = total_ram();
+    let (mut s, series_s) = settings_for(o, &menu, streamline.as_deref(), ram.is_some_and(|r| r <= LOW_RAM_BYTES));
+    if s.get("VICTORY_LOW_RAM_PROFILE").is_some_and(|v| v == "1") {
+        println!(
+            "{} GB of RAM: the low-memory profile (Series S, fewer copies kept; --set VICTORY_LOW_RAM_PROFILE=0 turns it off).",
+            ram.map_or(0, |r| (r + (1 << 29)) >> 30)
+        );
+    }
     // FSR 3 made ready: AMD's files, asked for only where they would be used (FSR 3 chosen,
     // or a card without DLSS Frame Generation).
     if s.contains_key("VICTORY_FSR_FRAMEGEN") {
@@ -1201,5 +1318,39 @@ mod tests {
         assert_eq!(stamp(0), "19700101-000000");
         assert_eq!(stamp(1_795_753_200), "20261127-042000");
         assert_eq!(stamp(951_782_400), "20000229-000000");
+    }
+
+    #[test]
+    fn low_ram_profile() {
+        let get = |s: &BTreeMap<String, String>, k: &str| s.get(k).cloned();
+        // A 16 GB PC: the profile, Series S, over the framegen texture room.
+        let mut o = options();
+        o.framegen_ready = true;
+        let (s, series_s) = settings_for(&o, &[], Some(Path::new("x")), true);
+        assert!(series_s);
+        assert_eq!(get(&s, "VICTORY_LOW_RAM_PROFILE").as_deref(), Some("1"));
+        assert_eq!(get(&s, "VICTORY_LAZY_LISTS").as_deref(), Some("1"));
+        assert_eq!(get(&s, "VICTORY_CARD_STEPS").as_deref(), Some("0"));
+        assert_eq!(get(&s, "VICTORY_TEXTURE_ROOM_PERCENT").as_deref(), Some("50"));
+        assert_eq!(get(&s, "VICTORY_BUFFERS_AHEAD").as_deref(), Some("0"));
+        assert_eq!(get(&s, "VICTORY_MENU_CONSOLE").as_deref(), Some("series-s"));
+        // Not so with more RAM.
+        let (s, series_s) = settings_for(&options(), &[], None, false);
+        assert!(!series_s && !s.contains_key("VICTORY_LOW_RAM_PROFILE"));
+        assert_eq!(get(&s, "VICTORY_CARD_STEPS").as_deref(), Some("2"));
+        // The menu's console and its other lines go over the profile.
+        let menu = parse_menu("VICTORY_MENU_CONSOLE=series-x\r\nVICTORY_CARD_STEPS=2\r\n");
+        let (s, series_s) = settings_for(&options(), &menu, None, true);
+        assert!(!series_s);
+        assert_eq!(get(&s, "VICTORY_CARD_STEPS").as_deref(), Some("2"));
+        assert_eq!(get(&s, "VICTORY_LAZY_LISTS").as_deref(), Some("1"));
+        // `--set` decides either way.
+        let mut o = options();
+        o.more = vec!["VICTORY_LOW_RAM_PROFILE=0".to_owned()];
+        let (s, series_s) = settings_for(&o, &[], None, true);
+        assert!(!series_s && !s.contains_key("VICTORY_LAZY_LISTS"));
+        o.more = vec!["VICTORY_LOW_RAM_PROFILE=1".to_owned()];
+        let (s, series_s) = settings_for(&o, &[], None, false);
+        assert!(series_s && s.contains_key("VICTORY_LAZY_LISTS"));
     }
 }
