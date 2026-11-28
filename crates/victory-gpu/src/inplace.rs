@@ -1288,7 +1288,15 @@ pub(crate) fn tick() {
         }
         Err(started) => started,
     };
+    // `VICTORY_INPLACE_CENSUS_S`: a census every that many seconds instead
+    // (on the 16 GB laptop the world came at 85-115 s and the device was
+    // lost 10-20 s later, between the two fixed ones).
+    static EVERY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let every = *EVERY.get_or_init(|| {
+        std::env::var("VICTORY_INPLACE_CENSUS_S").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0) * 1000
+    });
     let due = match DONE.load(Ordering::Relaxed) {
+        n if every > 0 => now >= started + every * (n + 1),
         0 => now >= started + 30_000,
         1 => now >= started + 150_000,
         _ => false,

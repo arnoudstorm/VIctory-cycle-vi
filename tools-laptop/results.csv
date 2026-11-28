@@ -30,3 +30,8 @@ time,variant,result,seconds,peak_private_gb,min_free_gb,card_peak_mb,budget_afte
 2026-11-28T12:51:34,X-W-64k,device-lost,91,13.92,0.27,7622,6490,"host GPU device removed after 1 submissions sent ahead (VICTORY_RELAY=1) of 1 lists",1967,85
 2026-11-28T12:58:55,Y-W-evict,device-lost,122,14.05,0.06,7744,6506,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",2632,99
 2026-11-28T13:00:48,Z-Y-diag,device-lost,110,13.71,0.09,7693,6430,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",4788,100
+2026-11-28T13:11:08,P1-probe,device-lost,95,13.79,0,7705,6505,"host GPU device removed after 3 submissions sent ahead (VICTORY_RELAY=1) of 41 lists",5986,84
+2026-11-28T13:14:56,C1-census,device-lost,102,13.92,0.02,7639,6516,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",1673,96
+2026-11-28T13:17:28,B1-best-inplace,device-lost,102,13.76,0.14,7700,6427,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",4165,84
+2026-11-28T13:19:34,B2-best-inplace,device-lost,124,13.87,0.02,7763,6428,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",2013,99
+2026-11-28T13:23:00,CL-best-closed,device-lost,115,13.66,0.09,7774,6538,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",4877,100
