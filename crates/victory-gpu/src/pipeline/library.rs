@@ -905,8 +905,18 @@ fn used() -> std::sync::MutexGuard<'static, Option<HashSet<String>>> {
 /// `VICTORY_EARLY_ALL=1`: every title pipeline is started at creation,
 /// requested before or not, so that the driver's own cache holds it for
 /// later runs.
+///
+/// `VICTORY_EARLY_PIPELINES=0`: none is started at creation; each is made
+/// when a draw first wants it. The list is still read and saved, so a later
+/// run with early starts finds it whole. On a 16 GB Radeon 780M laptop the
+/// 2,663 listed pipelines made during loading were 0.9-1.4 GB of private
+/// memory 40 s in (laptop round 24).
 pub(crate) fn wanted_early(key: &str) -> bool {
     static ALL: OnceLock<bool> = OnceLock::new();
+    static NONE: OnceLock<bool> = OnceLock::new();
+    if *NONE.get_or_init(|| std::env::var_os("VICTORY_EARLY_PIPELINES").is_some_and(|v| v == "0")) {
+        return false;
+    }
     if *ALL.get_or_init(|| std::env::var_os("VICTORY_EARLY_ALL").is_some_and(|v| v == "1")) {
         return true;
     }

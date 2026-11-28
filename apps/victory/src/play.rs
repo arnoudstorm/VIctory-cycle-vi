@@ -87,6 +87,12 @@ const LOW_RAM_SETTINGS: &[(&str, &str)] = &[
     ("VICTORY_INPLACE", "1"),
     ("VICTORY_TEXTURE_ROOM_PERCENT", "50"),
     ("VICTORY_BUFFERS_AHEAD", "0"),
+    // Pipelines: two driver compiles at a time, and none made ahead from the
+    // list of earlier runs (rounds 24-25: 40 s in, 6.1-6.4 GB private against
+    // 7.3-7.9 GB; peak 7.3-7.8 GB against 8.2-10.3 GB). A pipeline met first in
+    // a draw is compiled then: a hitch where the list would have had it ready.
+    ("VICTORY_PIPELINE_WORKERS", "2"),
+    ("VICTORY_EARLY_PIPELINES", "0"),
 ];
 
 /// The PC's physical RAM in bytes, if Windows says.
