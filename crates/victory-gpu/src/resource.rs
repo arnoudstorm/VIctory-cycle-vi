@@ -1808,6 +1808,21 @@ pub(crate) fn room(memory: Option<[u64; 4]>) -> bool {
         let mb = std::env::var("VICTORY_TEXTURE_BUDGET_MB").ok()?;
         mb.trim().parse::<u64>().ok().map(|mb| mb << 20)
     });
+    // Ported from the laptop branch (arnoudstorm/VIctory laptop/780m): no
+    // new copies while the card is at or past its budget, whatever the floor
+    // or the limit, nor while the PC's free physical memory is under
+    // `VICTORY_TEXTURE_MIN_FREE_MB` (1536 unless set; 0: off). On a card that
+    // shares the PC's memory (Radeon 780M, 16 GB) the queue otherwise fills
+    // the card past its budget while the world loads, and the driver cannot
+    // close a command list.
+    if let Some([budget, used, ..]) = memory {
+        if budget > 0 && used >= budget {
+            return false;
+        }
+    }
+    if pc_short_of_free_memory() {
+        return false;
+    }
     // (With the tiles of the copies made level by level, whose own bytes
     // count as none: `crate::tiles`.)
     let filled = KINDS[1].load(Relaxed) + crate::tiles::given_total();
@@ -1829,6 +1844,38 @@ pub(crate) fn room(memory: Option<[u64; 4]>) -> bool {
         }
         None => filled < WITHOUT_BUDGET,
     }
+}
+
+/// Whether the PC's free physical memory is under
+/// `VICTORY_TEXTURE_MIN_FREE_MB`; asked again at most every 50 ms.
+#[cfg(windows)]
+fn pc_short_of_free_memory() -> bool {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+    static ASKED: AtomicU64 = AtomicU64::new(0);
+    static SHORT: AtomicBool = AtomicBool::new(false);
+    let least = texture_min_free();
+    if least == 0 {
+        return false;
+    }
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let now = START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1;
+    let asked = ASKED.load(Relaxed);
+    if asked != 0 && now.saturating_sub(asked) < 50 {
+        return SHORT.load(Relaxed);
+    }
+    let short = crate::host::available_physical_ram().is_some_and(|free| free < least);
+    SHORT.store(short, Relaxed);
+    ASKED.store(now, Relaxed);
+    short
+}
+
+/// `VICTORY_TEXTURE_MIN_FREE_MB` in bytes (1536 unless set; 0: off).
+#[cfg(windows)]
+fn texture_min_free() -> u64 {
+    static MIN_FREE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *MIN_FREE.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_MIN_FREE_MB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(1536) << 20
+    })
 }
 
 /// The bytes of the card's memory the texture queue leaves free for
@@ -2309,6 +2356,23 @@ pub(crate) fn let_go_idle() {
     let from = if part == PART { FROM.load(Relaxed) } else { 0 };
     let mut looked = 0;
     let began = std::time::Instant::now();
+    // Over the line, the idle copies that only descriptor slots hold too
+    // ([`evict_shown`]): their slots are made null below, and the next look
+    // lets them go as any other.
+    let evicting = most != u64::MAX && evict_shown() && {
+        let now = crate::host::now_ms();
+        let last = EVICTED_AT.load(Relaxed);
+        now.saturating_sub(last) >= EVICT_EVERY_MS
+    };
+    let mut shown: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut shown_bytes = 0u64;
+    // Those whose slots the last such look made null: still held by the
+    // retired slots until the submissions sent then are done, not by a slot.
+    let unshown_before = if evicting {
+        std::mem::take(&mut *UNSHOWN.lock().unwrap_or_else(|e| e.into_inner()))
+    } else {
+        std::collections::HashSet::new()
+    };
     for at in all.range(from..).take(part).copied().chain(by_age.iter().map(|&(_, at)| at)) {
         if bytes >= most {
             break;
@@ -2339,6 +2403,19 @@ pub(crate) fn let_go_idle() {
                 r.host.wanted.store(u32::MAX, Relaxed);
                 made.take()
             } else {
+                if evicting
+                    && bytes + shown_bytes < most
+                    && let Some((host, _)) = made.as_ref()
+                    && crate::host::long_ago(r.host.used.load(Relaxed), idle_ms, IDLE_FRAMES)
+                    && std::sync::Arc::strong_count(host) == 1
+                    && crate::host::references(&host.texture) > 1
+                {
+                    use windows::core::Interface;
+                    let raw = host.texture.as_raw() as usize;
+                    if !unshown_before.contains(&raw) && shown.insert(raw) {
+                        shown_bytes += host.bytes;
+                    }
+                }
                 None
             }
         };
@@ -2354,6 +2431,29 @@ pub(crate) fn let_go_idle() {
             crate::host::retire(host);
         }
     }
+    // (The table's lock is not held while slots are made null: nothing of
+    // theirs needs it, and the texture pass takes the heaps' locks first.)
+    drop(all);
+    if evicting && !shown.is_empty() {
+        EVICTED_AT.store(crate::host::now_ms(), Relaxed);
+        let unshowing = std::time::Instant::now();
+        let slots = crate::descriptor::unshow(&shown);
+        EVICTED[0].fetch_add(shown.len() as u64, Relaxed);
+        EVICTED[1].fetch_add(shown_bytes, Relaxed);
+        EVICTED[2].fetch_add(slots as u64, Relaxed);
+        *UNSHOWN.lock().unwrap_or_else(|e| e.into_inner()) = shown.clone();
+        tracing::info!(
+            "over the card's line: {} idle host copies of textures ({} MB) held by descriptor slots alone, {} slots made null and queued \
+             again in {} ms (VICTORY_EVICT_SHOWN); since the start {} copies {} MB, {} slots; the next looks let them go",
+            shown.len(),
+            shown_bytes >> 20,
+            slots,
+            unshowing.elapsed().as_millis(),
+            EVICTED[0].load(Relaxed),
+            EVICTED[1].load(Relaxed) >> 20,
+            EVICTED[2].load(Relaxed),
+        );
+    }
     SWEPT_US[0].fetch_add(1, Relaxed);
     SWEPT_US[1].fetch_add(began.elapsed().as_micros() as u64, Relaxed);
     SWEPT_US[2].fetch_max(began.elapsed().as_micros() as u64, Relaxed);
@@ -2367,6 +2467,45 @@ pub(crate) fn let_go_idle() {
         });
     }
 }
+
+/// Whether [`let_go_idle`], over the card's line, also lets go of idle host
+/// copies that only descriptor slots hold, by making those slots null and
+/// queueing them again (`VICTORY_EVICT_SHOWN=1`; off by default).
+///
+/// The title's descriptor heaps show nearly every texture it has, and a
+/// slot keeps what it shows (`HostHeap::kept`): on a 16 GB PC with a Radeon
+/// 780M (one memory for the PC and the card) the sweep found next to
+/// nothing to let go while the card stood 1 GB over its budget of 6.5 GB
+/// in the world, and the device was lost for want of memory. A slot made
+/// null shows black until the texture pass makes it again, which it does
+/// only when the texture queue has room.
+#[cfg(windows)]
+fn evict_shown() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_EVICT_SHOWN").is_some_and(|v| v == "1"))
+}
+
+/// The least time between two looks that make slots null: a look walks
+/// every slot of the view heaps.
+#[cfg(windows)]
+const EVICT_EVERY_MS: u64 = 1000;
+
+/// When slots were last made null ([`crate::host::now_ms`]).
+#[cfg(windows)]
+static EVICTED_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The host textures (raw interface pointers) whose slots the last look
+/// made null: the next look does not count them again (run Y counted the
+/// same copies at every look while their retired slots still held them:
+/// 7.5 GB "since the start" with 1.5 GB of such copies alive).
+#[cfg(windows)]
+static UNSHOWN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<usize>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Since the start: host copies whose slots were made null, their bytes,
+/// and the slots.
+#[cfg(windows)]
+static EVICTED: [std::sync::atomic::AtomicU64; 3] = [const { std::sync::atomic::AtomicU64::new(0) }; 3];
 
 /// Since the start: looks of [`let_go_idle`], their microseconds, and the
 /// longest one's.

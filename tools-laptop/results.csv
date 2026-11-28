@@ -1,0 +1,32 @@
+time,variant,result,seconds,peak_private_gb,min_free_gb,card_peak_mb,budget_after_mb,error,max_draws,world_at_s
+2026-11-28T11:04:02,A-base,device-lost,79,14,0,7062,6403,"no host list for a state prelude"
+2026-11-28T11:05:14,B-relay1,device-lost,68,13,0,7119,6379,"no host list for a state prelude"
+2026-11-28T11:06:29,C-fps30,device-lost,73,13,0,7157,6358,"a host command list did not close (Not enough memory resources are available to complete this operation. (0x8007000E)): a command recorded into it was invalid"
+2026-11-28T11:07:44,D-textures,device-lost,73,12,0,7139,6359,"a host command list did not close (Not enough memory resources are available to complete this operation. (0x8007000E)): a command recorded into it was invalid"
+2026-11-28T11:09:06,E-pools,device-lost,79,11,0,7243,6322,"a host command list did not close (Not enough memory resources are available to complete this operation. (0x8007000E)): a command recorded into it was invalid"
+2026-11-28T11:43:30,G-nocard,device-lost,68,12.32,0.12,6592,7542,"no host list for a state prelude",11,
+2026-11-28T11:45:10,H-nocard-laptop,device-lost,98,13.2,0.02,7447,6349,"no host list for a state prelude",341,
+2026-11-28T11:46:36,I-H-fps30,device-lost,83,13.19,0.19,7440,6389,"no host list for a state prelude",370,
+2026-11-28T11:54:02,J-H-ported,device-lost,68,12.82,0.27,7524,6406,"host GPU device removed after 1 submissions sent ahead (VICTORY_RELAY=1) of 32 lists",10,
+2026-11-28T11:55:42,K-G-ported,device-lost,95,13.58,0.16,7177,6507,"a host command list did not reset (Not enough memory resources are available to complete this operation. (0x8007000E))",11,
+2026-11-28T12:03:57,L-K-lazy,device-lost,107,13.54,0.08,7785,6490,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",2144,100
+2026-11-28T12:06:08,M-J-lazy,device-lost,129,13.65,0.07,7703,6456,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",2310,115
+2026-11-28T12:12:03,N-L-snaps,survived,242,5.8,4.92,0,,"",11,
+2026-11-28T12:13:45,O-N-tex35,device-lost,99,13.59,0.14,6452,6513,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",539,
+2026-11-28T12:16:14,P-O-fps30,device-lost,147,13.5,0.25,6529,6534,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",281,
+2026-11-28T12:18:44,Q-L-snapsonly,device-lost,121,13.8,0.16,7747,6541,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",1384,114
+2026-11-28T12:21:16,R-N-again,device-lost,149,13.44,0.02,7797,6518,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",502,
+2026-11-28T12:28:02,S-L-diag,device-lost,161,13.53,0.35,7533,6519,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",3058,155
+2026-11-28T12:31:17,T-L-windows,device-lost,138,13.83,0.01,7595,6473,"host GPU device removed after 3 submissions sent ahead (VICTORY_RELAY=1) of 26 lists",3377,127
+2026-11-28T12:32:39,U-T-inplace,device-lost,79,13.44,0,7508,6540,"host GPU device removed after 1 submissions sent ahead (VICTORY_RELAY=1) of 3 lists",3470,73
+2026-11-28T12:34:38,V-U-diag,device-lost,116,13.44,0.2,7344,6497,"host GPU device removed after 1 submissions sent ahead (VICTORY_RELAY=1) of 8 lists",13,
+2026-11-28T12:37:23,A-base,device-lost,69,12.68,0.07,7735,6518,"no host list for a state prelude",10,
+2026-11-28T12:39:34,B-relay1,device-lost,129,11.21,0.45,7743,6495,"no host list for a state prelude",11,
+2026-11-28T12:40:50,C-fps30,device-lost,73,11.02,0.02,7147,6496,"a host command list did not reset (Not enough memory resources are available to complete this operation. (0x8007000E))",11,
+2026-11-28T12:42:22,D-textures,device-lost,89,12.48,0.34,7715,6496,"a host command list did not close (Not enough memory resources are available to complete this operation. (0x8007000E)): a command recorded into it was invalid",11,
+2026-11-28T12:44:03,E-pools,device-lost,99,11.33,0.17,7763,6516,"a host command list did not close (The GPU device instance has been suspended. Use GetDeviceRemovedReason to determine the appropriate action. (0x887A0005)): a command recorded into it was invalid",11,
+2026-11-28T12:45:24,F-all,device-lost,78,12.2,0.03,7615,6495,"host GPU device removed after 1 submissions sent ahead (VICTORY_RELAY=1) of 1 lists",11,
+2026-11-28T12:49:57,W-T-snaps,device-lost,236,13.85,0.03,7571,6540,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",1363,230
+2026-11-28T12:51:34,X-W-64k,device-lost,91,13.92,0.27,7622,6490,"host GPU device removed after 1 submissions sent ahead (VICTORY_RELAY=1) of 1 lists",1967,85
+2026-11-28T12:58:55,Y-W-evict,device-lost,122,14.05,0.06,7744,6506,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",2632,99
+2026-11-28T13:00:48,Z-Y-diag,device-lost,110,13.71,0.09,7693,6430,"a host state prelude did not record (Not enough memory resources are available to complete this operation. (0x8007000E))",4788,100
